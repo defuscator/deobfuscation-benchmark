@@ -1,0 +1,12 @@
+# Samples are generated on your machine from the real obfuscators, never committed. That is the
+# point: a fixture checked into this repo could have been hand-written to pass, which is exactly
+# the failure this benchmark exists to catch.
+samples/
+samples-es6/
+samples-families/
+
+# Fetched from the encoders' own pages at first run. Not vendored: it is someone else's code.
+.encoders.cache.js
+
+node_modules/
+package-lock.json

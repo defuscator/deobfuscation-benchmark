@@ -1,0 +1,15 @@
+{
+  "name": "deobfuscation-benchmark",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A reproducible benchmark for JavaScript deobfuscators, scored against output from the real obfuscators and verified by execution.",
+  "license": "MIT",
+  "scripts": {
+    "generate": "node gen.js && node gen-es6.js && node gen-families.js",
+    "score": "python3 eval.py && node eval-behaviour.js && node eval-es6.js && python3 eval-families.py"
+  },
+  "dependencies": {
+    "javascript-obfuscator": "^5.6.0",
+    "jsfuck": "^0.4.0"
+  }
+}

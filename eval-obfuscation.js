@@ -21,7 +21,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 
 // A tool that both obfuscates (--obfuscate) and analyses (--json). Override with DEFUSCATOR_CLI.
 const EXE = process.platform === 'win32' ? 'defuscator.exe' : 'defuscator';
@@ -78,6 +78,11 @@ const CASES = {
     var s = "quote:\\" backslash:\\\\ tab:\\t newline:\\n";
     globalThis.__r = JSON.stringify([s.length, s]);`,
 
+  // Also the regression guard for CLI output encoding. With the string array on but escaping
+  // off, these values reach stdout as real characters rather than escape sequences. The CLI
+  // used to write them in the system ANSI code page, producing invalid UTF-8 and a literal
+  // '?' for anything that page could not represent. Every other case is ASCII and would not
+  // notice, which is why the defect survived until the full combination matrix existed.
   'unicode-and-emoji': `
     var s = "caf\\u00e9 \\u4e2d\\u6587 \\ud83d\\ude00 end";
     globalThis.__r = JSON.stringify([s, s.length, [...s].length]);`,
@@ -213,121 +218,160 @@ function run(code) {
   return context.__r;
 }
 
-function cli(args) {
-  try {
-    return execFileSync(CLI, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  } catch (e) {
-    return e.stdout || '';
-  }
+// All sixteen combinations of the four transforms. The CLI applies every transform unless told
+// otherwise, so each combination is expressed as the switches that turn transforms off. Testing
+// only the all-on default left whole branches unexercised - with the string array disabled the
+// obfuscator takes a different path for string encoding that the default never reaches.
+const TRANSFORMS = [
+  { bit: 'B', flag: '--no-bracket-notation' },
+  { bit: 'S', flag: '--no-string-array' },
+  { bit: 'E', flag: '--no-encode-strings' },
+  { bit: 'H', flag: '--no-hex-numbers' },
+];
+
+const COMBOS = [];
+for (let mask = 0; mask < 16; mask++) {
+  const on = TRANSFORMS.filter((_, i) => (mask & (1 << i)) !== 0);
+  const off = TRANSFORMS.filter((_, i) => (mask & (1 << i)) === 0);
+  COMBOS.push({
+    mask,
+    label: TRANSFORMS.map((t, i) => ((mask & (1 << i)) ? t.bit : '-')).join(''),
+    flags: off.map((t) => t.flag),
+    enabled: on.map((t) => t.bit),
+    stringArrayOn: on.some((t) => t.bit === 'S'),
+    anyOn: on.length > 0,
+  });
 }
 
-const failures = [];
-let ok = 0;
+function execAsync(args) {
+  return new Promise((resolve) => {
+    execFile(CLI, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
+      resolve(stdout || (err && err.stdout) || '');
+    });
+  });
+}
 
-console.log('%s %s %s %s', 'case'.padEnd(26), 'parses'.padEnd(7), 'behaviour'.padEnd(11), 'round-trip');
-console.log('-'.repeat(72));
+// A full matrix is 16 x 28 obfuscations plus the same number of analyses; run sequentially that is
+// several minutes, which is too slow for something wired into every verification build.
+async function pool(tasks, width) {
+  const results = new Array(tasks.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(width, tasks.length) }, async () => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  }));
+  return results;
+}
 
-for (const [name, source] of Object.entries(CASES)) {
-  const file = path.join(WORK, name + '.js');
-  fs.writeFileSync(file, source, 'utf8');
+(async () => {
+  const names = Object.keys(CASES);
+  const expected = {};
+  const failures = [];
 
-  let expected;
-  try {
-    expected = run(source);
-  } catch (e) {
-    failures.push(`${name}: the INPUT itself does not run (${e.message.slice(0, 70)}) — fix the case, not the tool`);
-    continue;
-  }
-
-  const obfuscated = cli([file, '--obfuscate']);
-  if (!obfuscated.trim()) {
-    failures.push(`${name}: obfuscator produced no output`);
-    continue;
-  }
-
-  // 1. parses
-  let parses = true;
-  try {
-    new vm.Script(obfuscated);
-  } catch (e) {
-    parses = false;
-    failures.push(`${name}: obfuscated output does not parse (${e.message.slice(0, 70)})`);
-  }
-
-  // 2. behaviour preserved
-  let behaviour = 'n/a';
-  if (parses) {
+  for (const name of names) {
     try {
-      const actual = run(obfuscated);
-      if (actual === expected) {
-        behaviour = 'same';
-      } else {
-        behaviour = 'DIFFERENT';
-        failures.push(`${name}: obfuscated output computes a different value\n      input:      ${String(expected).slice(0, 150)}\n      obfuscated: ${String(actual).slice(0, 150)}`);
-      }
+      expected[name] = run(CASES[name]);
     } catch (e) {
-      behaviour = 'THREW';
-      failures.push(`${name}: obfuscated output threw (${e.message.slice(0, 70)})`);
+      failures.push(`${name}: the INPUT itself does not run (${e.message.slice(0, 70)}) - fix the case, not the tool`);
     }
   }
 
-  // 3. round-trip: the product claims the analyzer statically unwinds what this produces
-  let roundTrip = 'n/a';
-  if (parses && behaviour === 'same') {
-    const obfFile = path.join(WORK, name + '.obf.js');
+  const jobs = [];
+  for (const name of names) {
+    if (!(name in expected)) continue;
+    for (const combo of COMBOS) {
+      jobs.push({ name, combo });
+    }
+  }
+
+  const outputs = await pool(jobs.map((job) => async () => {
+    const file = path.join(WORK, `${job.name}.${job.combo.label}.js`);
+    fs.writeFileSync(file, CASES[job.name], 'utf8');
+    const obfuscated = await execAsync([file, '--obfuscate', ...job.combo.flags]);
+    if (!obfuscated.trim()) return { obfuscated: '', decoded: '' };
+
+    const obfFile = file.replace(/\.js$/, '.obf.js');
     fs.writeFileSync(obfFile, obfuscated, 'utf8');
     let decoded = '';
     try {
-      decoded = JSON.parse(cli([obfFile, '--json'])).decodedCode || '';
+      decoded = JSON.parse(await execAsync([obfFile, '--json'])).decodedCode || '';
     } catch (e) {
       decoded = '';
     }
+    return { obfuscated, decoded };
+  }), 8);
 
-    if (!decoded) {
-      roundTrip = 'NO OUTPUT';
-      failures.push(`${name}: analyzer produced no decoded output for our own obfuscation`);
-    } else {
-      try {
-        const back = run(decoded);
-        if (back !== expected) {
-          roundTrip = 'DIFFERENT';
-          failures.push(`${name}: round-trip changed behaviour\n      input:   ${String(expected).slice(0, 150)}\n      decoded: ${String(back).slice(0, 150)}`);
-        } else {
-          // The real requirement is that no obfuscation machinery survives: no string-array
-          // declaration and no lookups into one. Counting recovered strings looks like the
-          // obvious measure and is a bad one, because the analyzer legitimately does *better*
-          // than substitution on some inputs - given `var o = {class: 1}; o.class`, it folds the
-          // read to `1` and drops the dead object, so the string is absent from the output for
-          // the right reason. Behaviour equality above is what proves the fold was sound.
-          const residue = /var\s+_0x[0-9a-f]+\s*=\s*\[/i.test(decoded) || /_0x[0-9a-f]+\s*\[/i.test(decoded);
-          const hidden = hiddenValues(obfuscated);
-          const recovered = hidden.filter((s) => decoded.includes(s));
-          if (residue) {
-            roundTrip = 'ARRAY LEFT';
-            failures.push(`${name}: string-array machinery survives our own round-trip`);
-          } else {
-            // Reported for information; a value can be legitimately absent because it was folded.
-            roundTrip = `clean (${recovered.length}/${hidden.length} inlined)`;
-          }
-        }
-      } catch (e) {
-        roundTrip = 'THREW';
-        failures.push(`${name}: decoded output threw (${e.message.slice(0, 70)})`);
-      }
+  // grid[name] is one character per combination: '.' clean, otherwise the first thing that broke.
+  const grid = {};
+  for (const name of names) grid[name] = [];
+
+  jobs.forEach((job, i) => {
+    const { name, combo } = job;
+    const { obfuscated, decoded } = outputs[i];
+    const mark = (ch, message) => { grid[name].push(ch); failures.push(`${name} [${combo.label}]: ${message}`); };
+
+    if (!obfuscated.trim()) { mark('x', 'obfuscator produced no output'); return; }
+
+    // With every transform off the obfuscator must be a no-op, not a reformatter.
+    if (!combo.anyOn && obfuscated.trim() !== CASES[name].trim()) {
+      mark('i', 'all transforms disabled but the output changed'); return;
     }
+
+    try { new vm.Script(obfuscated); }
+    catch (e) { mark('p', `output does not parse (${e.message.slice(0, 60)})`); return; }
+
+    let actual;
+    try { actual = run(obfuscated); }
+    catch (e) { mark('t', `output threw (${e.message.slice(0, 60)})`); return; }
+
+    if (actual !== expected[name]) {
+      mark('B', `computes a different value\n      input:      ${String(expected[name]).slice(0, 120)}\n      obfuscated: ${String(actual).slice(0, 120)}`);
+      return;
+    }
+
+    if (!decoded) { mark('d', 'analyzer produced no decoded output'); return; }
+
+    let back;
+    try { back = run(decoded); }
+    catch (e) { mark('T', `decoded output threw (${e.message.slice(0, 60)})`); return; }
+
+    if (back !== expected[name]) {
+      mark('R', `round-trip changed behaviour\n      input:   ${String(expected[name]).slice(0, 120)}\n      decoded: ${String(back).slice(0, 120)}`);
+      return;
+    }
+
+    // Residue only means anything where a string array was actually produced.
+    if (combo.stringArrayOn && /var\s+_0x[0-9a-f]+\s*=\s*\[/i.test(decoded)) {
+      mark('m', 'string-array machinery survives the round-trip'); return;
+    }
+
+    grid[name].push('.');
+  });
+
+  fs.rmSync(WORK, { recursive: true, force: true });
+
+  console.log('Sixteen transform combinations per case. Columns are ordered by mask over');
+  console.log('B=bracket-notation S=string-array E=encode-strings H=hex-numbers.');
+  console.log('. clean   B behaviour   R round-trip   p parse   m machinery   i not a no-op   x/d/t/T no output or threw');
+  console.log();
+  console.log('%s %s', 'case'.padEnd(26), COMBOS.map((c) => c.label[0]).join(''));
+  console.log('-'.repeat(46));
+  for (const name of names) {
+    console.log('%s %s', name.padEnd(26), grid[name].join(''));
   }
 
-  if (parses && behaviour === 'same' && String(roundTrip).startsWith('clean')) ok++;
-  console.log('%s %s %s %s', name.padEnd(26), (parses ? 'yes' : 'NO').padEnd(7), behaviour.padEnd(11), roundTrip);
-}
+  const cells = jobs.length;
+  const clean = Object.values(grid).reduce((n, row) => n + row.filter((c) => c === '.').length, 0);
+  console.log();
+  console.log(`${clean} of ${cells} case/combination cells clean (${names.length} cases x ${COMBOS.length} combinations)`);
 
-fs.rmSync(WORK, { recursive: true, force: true });
-
-console.log();
-console.log(`${ok} of ${Object.keys(CASES).length} cases fully clean`);
-if (failures.length) {
-  console.log('\nFAILURES:');
-  for (const f of failures) console.log('  -', f);
-  process.exit(1);
-}
-console.log('Obfuscation preserves behaviour and round-trips on every case.');
+  if (failures.length) {
+    console.log('\nFAILURES:');
+    for (const f of failures.slice(0, 40)) console.log('  -', f);
+    if (failures.length > 40) console.log(`  ... and ${failures.length - 40} more`);
+    process.exit(1);
+  }
+  console.log('Every combination preserves behaviour and round-trips on every case.');
+})();

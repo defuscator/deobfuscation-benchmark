@@ -89,7 +89,7 @@ Scripts individually:
 | `gen-es6.js` / `eval-es6.js` | 10 samples from ES2015+ source, behaviour-checked |
 | `gen-families.js` / `eval-families.py` | P.A.C.K.E.R., JSFuck, JJEncode, AAEncode |
 | `eval-behaviour.js` | Behaviour check over the main matrix |
-| `eval-obfuscation.js` | The obfuscation direction: 28 programs, behaviour + round-trip |
+| `eval-obfuscation.js` | The obfuscation direction: 28 programs x 16 transform combinations |
 
 `eval-families.py` and `eval-es6.js` exit non-zero when an expectation regresses, so they work in CI.
 
@@ -121,7 +121,7 @@ Defuscator, against javascript-obfuscator 5.6:
 | Modern-JavaScript matrix | **10 of 10** behaviourally identical |
 | Dean Edwards P.A.C.K.E.R. | Unpacked; original source recovered |
 | JSFuck / JJEncode / AAEncode | Identified, **not decoded** |
-| Obfuscation direction | **28 of 28** preserve behaviour, parse, and round-trip |
+| Obfuscation direction | **448 of 448** cells (28 cases x 16 combinations) preserve behaviour and round-trip |
 
 ### The two skipped samples
 
@@ -139,7 +139,9 @@ so the exemption cannot quietly become a blind spot.
 `eval-obfuscation.js` scores the other direction, which is the riskier one: a deobfuscator that
 errs writes a bad report about someone else's code, while an obfuscator that errs corrupts code the
 user pasted in and is about to ship. 28 self-contained programs are executed before and after
-obfuscation, then the result is fed back through the deobfuscator and executed again.
+obfuscation, then the result is fed back through the deobfuscator and executed again -- across all
+sixteen combinations of the four transforms, since testing only the all-on default leaves whole
+branches unreached. That is not hypothetical: the string-array-off path exposed a real defect.
 
 Cases target where an AST rewrite is most likely to go wrong — `"use strict"` as a directive rather
 than data, object-literal keys, class members and `super`, private class fields (`this.#v` is a

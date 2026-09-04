@@ -72,7 +72,7 @@ Requires Node 18+, Python 3.8+, and a built CLI.
 ```bash
 npm install
 npm run generate      # writes samples/, samples-es6/, samples-families/
-npm run score         # family + lookups + markers, then behaviour
+npm run score         # family, lookups, markers, behaviour, obfuscation
 ```
 
 Point it at any deobfuscator that accepts a file and emits JSON:
@@ -89,6 +89,7 @@ Scripts individually:
 | `gen-es6.js` / `eval-es6.js` | 10 samples from ES2015+ source, behaviour-checked |
 | `gen-families.js` / `eval-families.py` | P.A.C.K.E.R., JSFuck, JJEncode, AAEncode |
 | `eval-behaviour.js` | Behaviour check over the main matrix |
+| `eval-obfuscation.js` | The obfuscation direction: 28 programs, behaviour + round-trip |
 
 `eval-families.py` and `eval-es6.js` exit non-zero when an expectation regresses, so they work in CI.
 
@@ -120,6 +121,7 @@ Defuscator, against javascript-obfuscator 5.6:
 | Modern-JavaScript matrix | **10 of 10** behaviourally identical |
 | Dean Edwards P.A.C.K.E.R. | Unpacked; original source recovered |
 | JSFuck / JJEncode / AAEncode | Identified, **not decoded** |
+| Obfuscation direction | **28 of 28** preserve behaviour, parse, and round-trip |
 
 ### The two skipped samples
 
@@ -132,9 +134,27 @@ backtracking cost explodes with length — measured at **0 ms over 23 characters
 Those samples are exempt only when the report actually flagged the guard, which the harness asserts,
 so the exemption cannot quietly become a blind spot.
 
+## The obfuscation direction
+
+`eval-obfuscation.js` scores the other direction, which is the riskier one: a deobfuscator that
+errs writes a bad report about someone else's code, while an obfuscator that errs corrupts code the
+user pasted in and is about to ship. 28 self-contained programs are executed before and after
+obfuscation, then the result is fed back through the deobfuscator and executed again.
+
+Cases target where an AST rewrite is most likely to go wrong — `"use strict"` as a directive rather
+than data, object-literal keys, class members and `super`, private class fields (`this.#v` is a
+private name, not a property), tagged templates, regex literals, surrogate pairs, control
+characters, `__proto__` keys, and an input that already declares the identifier the obfuscator
+wants for its own array.
+
+Round-trip is **not** scored by counting recovered strings, which is the obvious measure and a bad
+one. Given `var o = { class: 1 }; o.class`, a good analyzer folds the read to `1` and drops the
+dead object, so the string is legitimately absent. What is required is that no machinery survives —
+no array declaration, no lookups into one — with behavioural equality proving the fold was sound.
+
 ## Known limits
 
-- Covers **deobfuscation only**. It says nothing about obfuscation quality.
+- Obfuscation **strength** is not measured, only correctness and reversibility.
 - One source program per matrix. Broader corpora would test more of a real engine.
 - The behaviour check needs a deterministic entry point, so samples are written for that.
 - `renameGlobals` renames a function the original source defined; no decoder can recover the name,

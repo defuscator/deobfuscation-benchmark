@@ -8,6 +8,12 @@ CLI = os.environ.get(
     os.path.join(HERE, "..", "..", "src", "Defuscator.Cli", "bin", "Release", "net8.0",
                  "defuscator.exe" if os.name == "nt" else "defuscator"))
 
+if not os.path.exists(CLI):
+    sys.exit(
+        "Could not find the deobfuscator CLI at:\n  %s\n\n"
+        "This benchmark scores a tool; it does not ship one. Point it at a build:\n"
+        "  DEFUSCATOR_CLI=/path/to/your-tool python3 %s\n" % (CLI, os.path.basename(__file__)))
+
 manifest = json.load(open(os.path.join(HERE, "samples", "manifest.json"), encoding="utf-8"))
 markers = manifest["markers"]
 

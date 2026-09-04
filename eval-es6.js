@@ -17,6 +17,13 @@ const HERE = __dirname;
 const CLI = process.env.DEFUSCATOR_CLI || path.join(
   __dirname, '..', '..', 'src', 'Defuscator.Cli', 'bin', 'Release', 'net8.0',
   process.platform === 'win32' ? 'defuscator.exe' : 'defuscator');
+
+if (!fs.existsSync(CLI)) {
+  console.error(`Could not find the deobfuscator CLI at:\n  ${CLI}\n`);
+  console.error('This benchmark scores a tool; it does not ship one. Point it at a build:');
+  console.error(`  DEFUSCATOR_CLI=/path/to/your-tool node ${path.basename(__filename)}\n`);
+  process.exit(2);
+}
 const dir = path.join(HERE, 'samples-es6');
 const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
 const markers = manifest.markers;

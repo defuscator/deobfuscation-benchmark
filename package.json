@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "generate": "node gen.js && node gen-es6.js && node gen-families.js",
-    "score": "python3 eval.py && node eval-behaviour.js && node eval-es6.js && python3 eval-families.py"
+    "score": "python3 eval.py && node eval-behaviour.js && node eval-es6.js && python3 eval-families.py && node eval-obfuscation.js"
   },
   "dependencies": {
     "javascript-obfuscator": "^5.6.0",

@@ -19,8 +19,15 @@ markers = manifest["markers"]
 
 # A call whose first argument is a bare index: hex, decimal, or the 'hexadecimal-numeric-string'
 # form. Identifier-agnostic so mangled names count. parseInt() is excluded because its argument is
-# itself a call. This over-counts on samples whose original code makes such calls (none here) and
-# on debugProtection's self-call `_0x(0)`, which is why the engine's own finding is also shown.
+# itself a call.
+#
+# This is an APPROXIMATE signal, not ground truth. It matches any `identifier(number)`, so it also
+# counts things that are not string-array lookups at all: a proxy object's arithmetic method
+# `_0x1a.BOiqy(1200, 345)`, debugProtection's own self-call `_0x(0)`, an ordinary `slice(1)`. On a
+# fully resolved sample these leave a non-zero "after" count that means nothing. The engine's own
+# "Unresolved string-array lookups" finding is the authority, and the "lookups remain" flag below is
+# driven by that finding, not by this regex. The b->a column is kept only as a rough visual cue and
+# is labelled approximate.
 LOOKUP = re.compile(r"\b(?!parseInt\b)[A-Za-z_$][\w$]*\s*\(\s*(?:-?0x[0-9a-f]+|-?\d+|'0x[0-9a-f]+')\s*[,)]")
 
 rows = []
@@ -44,7 +51,14 @@ for case in manifest["cases"]:
     decoded = data.get("decodedCode") or ""
     indicators = " ".join(data.get("indicators") or [])
 
-    hidden = [m for m in markers if m not in src]
+    # Score recovery against the markers the generator marked recoverable-in-principle: string-data
+    # markers the obfuscator hid. A renamed global identifier is not in this set - it cannot be
+    # recovered by anyone, so counting it as a miss would measure the obfuscator, not us. Falls back
+    # to the old behaviour for a manifest generated before hiddenRecoverable existed.
+    if "hiddenRecoverable" in case:
+        hidden = list(case["hiddenRecoverable"])
+    else:
+        hidden = [m for m in markers if m not in src]
     recovered = [m for m in hidden if m in decoded or m in indicators]
 
     lookups_before = len(LOOKUP.findall(src))
@@ -66,17 +80,17 @@ for case in manifest["cases"]:
         finding,
     ))
 
-print("%-26s %-22s %-13s %-12s %-8s %s" % ("case", "family", "hidden->found", "lookups b->a", "finding", "syntax"))
+print("%-26s %-22s %-13s %-12s %-8s %s" % ("case", "family", "hidden->found", "lookups b->a~", "unresolved", "syntax"))
 print("-" * 112)
 for name, fam, hid, rec, lb, la, syn, finding in rows:
-    resolved = "n/a" if lb == 0 else ("%d->%d" % (lb, la))
+    resolved = "n/a" if lb == 0 else ("~%d->%d" % (lb, la))
+    unresolved = finding not in ("-", "0")
     flag = ""
     if hid and rec < hid:
         flag = "  <== MISSED %d" % (hid - rec)
-    elif lb > 0 and la > 0:
-        flag = "  <== lookups remain"
-    elif finding not in ("-", "0"):
-        flag = "  <== finding %s" % finding
+    elif unresolved:
+        # The engine says string-array lookups actually survived - a real gap.
+        flag = "  <== %s lookups unresolved" % finding
     print("%-26s %-22s %-13s %-12s %-8s %s%s" % (
         name, fam[:22], ("%d->%d" % (hid, rec)) if hid else "none hidden",
         resolved, finding, (syn[:28] if syn else ""), flag))

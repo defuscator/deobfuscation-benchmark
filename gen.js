@@ -25,6 +25,17 @@ const MARKERS = [
   'querySelector',
 ];
 
+// Recovery is only a meaningful test for markers carried as string DATA: those go into the string
+// array and can be brought back. A marker that exists only as an identifier - a function name, a
+// property - is a different matter. renameGlobals renames `collectPayment` to a hex name and records
+// the original nowhere, so no deobfuscator can recover it; counting that as a miss measures the
+// obfuscator's irreversibility, not the deobfuscator. So the recovery target is exactly the markers
+// that appear inside a string literal in the source.
+const STRING_MARKERS = MARKERS.filter((m) => {
+  const re = new RegExp("['\"`][^'\"`]*" + m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "[^'\"`]*['\"`]");
+  return re.test(SOURCE);
+});
+
 const CASES = {
   'baseline-stringarray': {
     compact: true, stringArray: true, stringArrayThreshold: 1,
@@ -201,14 +212,17 @@ for (const [name, options] of Object.entries(CASES)) {
     // Which markers survive verbatim in the obfuscated text? Those are not really hidden,
     // so recovering them proves nothing.
     const visible = MARKERS.filter((m) => code.includes(m));
-    manifest.push({ name, file, bytes: code.length, visibleMarkers: visible });
+    // The ones worth scoring: string-data markers that the obfuscator actually hid. An identifier
+    // marker lost to renameGlobals is deliberately excluded - it is unrecoverable by construction.
+    const hiddenRecoverable = STRING_MARKERS.filter((m) => !code.includes(m));
+    manifest.push({ name, file, bytes: code.length, visibleMarkers: visible, hiddenRecoverable });
   } catch (e) {
     manifest.push({ name, error: String(e).slice(0, 120) });
   }
 }
 
 fs.writeFileSync(path.join(outDir, 'manifest.json'),
-  JSON.stringify({ markers: MARKERS, cases: manifest }, null, 1), 'utf8');
+  JSON.stringify({ markers: MARKERS, stringMarkers: STRING_MARKERS, cases: manifest }, null, 1), 'utf8');
 
 for (const c of manifest) {
   if (c.error) { console.log(`  ${c.name.padEnd(26)} ERROR ${c.error}`); continue; }

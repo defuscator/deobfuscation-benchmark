@@ -147,6 +147,13 @@ cases['packer-base62'] = () => packAndVerify(SOURCE);
 cases['packer-nested-eval'] = () => packAndVerify(
   "var _0x1=['" + Buffer.from('inner').toString('base64') + "'];\n" + SOURCE);
 
+// Double packing and regex-heavy payloads are deliberately absent. This generator's packer
+// cannot produce faithful samples for them: packAndVerify replays the unpacking and the result
+// does not match the input, so the samples were refused. Emitting a fixture the generator
+// itself cannot verify would make its score meaningless, and an acknowledged gap is worth more
+// than a case that quietly proves nothing. Covering them needs a packer that handles keys
+// colliding with restored text, which is a piece of work in its own right.
+
 cases['jsfuck-small'] = () => JSFuck.encode('alert(1)');
 
 cases['jsfuck-eval'] = () => JSFuck.encode('document.querySelector("#cvv")', true);

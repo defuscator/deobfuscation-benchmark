@@ -278,6 +278,22 @@ async function pool(tasks, width) {
     }
   }
 
+  // Every bench here feeds the analyzer something obfuscated, but the product also invites people
+  // to paste ordinary code, and the decoded view is what they read. Analysing an untouched program
+  // must not change what it does either.
+  const passthrough = await pool(names.filter((n) => n in expected).map((name) => async () => {
+    const file = path.join(WORK, `${name}.plain.js`);
+    fs.writeFileSync(file, CASES[name], 'utf8');
+    try {
+      return JSON.parse(await execAsync([file, '--json'])).decodedCode || '';
+    } catch (e) {
+      return '';
+    }
+  }), 8);
+
+  const passthroughByName = {};
+  names.filter((n) => n in expected).forEach((name, i) => { passthroughByName[name] = passthrough[i]; });
+
   const jobs = [];
   for (const name of names) {
     if (!(name in expected)) continue;
@@ -352,20 +368,47 @@ async function pool(tasks, width) {
 
   fs.rmSync(WORK, { recursive: true, force: true });
 
-  console.log('Sixteen transform combinations per case. Columns are ordered by mask over');
-  console.log('B=bracket-notation S=string-array E=encode-strings H=hex-numbers.');
+  const DIGITS = '0123456789abcdef';
+  console.log('Each row is one case. The sixteen columns are the sixteen combinations of the four');
+  console.log('transforms; the "plain" column analyses the source with no obfuscation at all.');
   console.log('. clean   B behaviour   R round-trip   p parse   m machinery   i not a no-op   x/d/t/T no output or threw');
   console.log();
-  console.log('%s %s', 'case'.padEnd(26), COMBOS.map((c) => c.label[0]).join(''));
-  console.log('-'.repeat(46));
+  console.log('columns:');
+  COMBOS.forEach((combo, i) => {
+    const on = combo.enabled.length ? combo.enabled.join('') : 'none';
+    console.log('  %s = %s', DIGITS[i], on);
+  });
+  console.log('  B=bracket-notation  S=string-array  E=encode-strings  H=hex-numbers');
+  console.log();
+  // Plain-analysis check, reported as its own column.
+  const plain = {};
   for (const name of names) {
-    console.log('%s %s', name.padEnd(26), grid[name].join(''));
+    if (!(name in expected)) { plain[name] = '-'; continue; }
+    const decoded = passthroughByName[name];
+    if (!decoded) { plain[name] = 'd'; failures.push(`${name} [plain]: analyzer produced no decoded output`); continue; }
+    try {
+      plain[name] = run(decoded) === expected[name] ? '.' : 'B';
+      if (plain[name] === 'B') {
+        failures.push(`${name} [plain]: analysing unobfuscated source changed what it computes`);
+      }
+    } catch (e) {
+      plain[name] = 't';
+      failures.push(`${name} [plain]: decoded output threw (${e.message.slice(0, 60)})`);
+    }
+  }
+
+  console.log('%s %s  %s', 'case'.padEnd(26), COMBOS.map((_, i) => DIGITS[i]).join(''), 'plain');
+  console.log('-'.repeat(52));
+  for (const name of names) {
+    console.log('%s %s  %s', name.padEnd(26), grid[name].join(''), plain[name]);
   }
 
   const cells = jobs.length;
   const clean = Object.values(grid).reduce((n, row) => n + row.filter((c) => c === '.').length, 0);
   console.log();
+  const plainClean = Object.values(plain).filter((c) => c === '.').length;
   console.log(`${clean} of ${cells} case/combination cells clean (${names.length} cases x ${COMBOS.length} combinations)`);
+  console.log(`${plainClean} of ${names.length} cases unchanged in behaviour when analysed without obfuscation`);
 
   if (failures.length) {
     console.log('\nFAILURES:');

@@ -110,7 +110,7 @@ Some endpoint protection quarantines the JJEncode `$` samples within seconds of 
 
 ## Current results
 
-Defuscator, against javascript-obfuscator 5.6:
+Defuscator, against javascript-obfuscator 5.8.0 (re-run September 2026; results unchanged from 5.6):
 
 | | |
 | --- | --- |

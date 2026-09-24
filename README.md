@@ -120,7 +120,8 @@ Defuscator, against javascript-obfuscator 5.6:
 | Behaviourally identical to input | **29 of 31 compared** (2 self-defending, below) |
 | Modern-JavaScript matrix | **10 of 10** behaviourally identical |
 | Dean Edwards P.A.C.K.E.R. | Unpacked; original source recovered |
-| JSFuck / JJEncode / AAEncode | Identified, **not decoded** |
+| JSFuck | **Decoded** statically: the exact payload of both cases recovered, by simulating the coercions rather than running them |
+| JJEncode / AAEncode | Identified, **not decoded** |
 | Obfuscation direction | **448 of 448** cells (28 cases x 16 combinations) preserve behaviour and round-trip |
 
 ### The two skipped samples

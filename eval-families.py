@@ -5,8 +5,11 @@ Run gen-families.js first. Two things are measured per sample:
   family   -- what the report names it. Misidentifying a textbook format is a defect on its own,
               because the family is the first thing an analyst reads.
   hidden   -- markers that do not appear verbatim in the obfuscated source, and how many were
-              recovered. Only meaningful where we claim to decode; for JSFuck/JJEncode/AAEncode we
+              recovered. Only meaningful where we claim to decode; for JJEncode/AAEncode we
               deliberately do not (see Compare.aspx), so a 0 there is expected, not a failure.
+  payload  -- for cases that encode something other than the shared skimmer source (the JSFuck
+              ones), the exact payload the case encoded must appear in the decoded output. Counting
+              markers would say nothing there, because those payloads contain none of them.
 
 The expectations below are asserted, so this exits non-zero if a claim regresses.
 """
@@ -31,13 +34,20 @@ if not os.path.exists(CLI):
 EXPECTED = {
     "packer-base62":         ("Dean Edwards P.A.C.K.E.R.", True),
     "packer-nested-eval":    ("Dean Edwards P.A.C.K.E.R.", True),
-    "jsfuck-small":          ("JSFuck", False),
-    "jsfuck-eval":           ("JSFuck", False),
+    "jsfuck-small":          ("JSFuck", True),
+    "jsfuck-eval":           ("JSFuck", True),
     "jjencode-dollar":       ("AAEncode / JJEncode", False),
     "jjencode-underscore":   ("AAEncode / JJEncode", False),
     "aaencode":              ("AAEncode / JJEncode", False),
     "jjencode-dollar-small": ("AAEncode / JJEncode", False),
     "aaencode-small":        ("AAEncode / JJEncode", False),
+}
+
+# The exact text each of these cases encodes (see gen-families.js). A decoder that claims the family
+# must hand it back; jsfuck-small encodes a string that is never run, so it comes back as a literal.
+EXPECTED_PAYLOAD = {
+    "jsfuck-small": 'alert(1)',
+    "jsfuck-eval":  'document.querySelector("#cvv")',
 }
 
 manifest = json.load(open(os.path.join(HERE, "samples-families", "manifest.json"), encoding="utf-8"))
@@ -82,6 +92,12 @@ for case in manifest["cases"]:
         if family != want_family:
             flag = "  <== FAMILY expected %r" % want_family
             failures.append("%s: family %r, expected %r" % (name, family, want_family))
+        elif want_decode and name in EXPECTED_PAYLOAD:
+            if EXPECTED_PAYLOAD[name] not in decoded:
+                flag = "  <== PAYLOAD not recovered"
+                failures.append("%s: decoded output does not contain %r" % (name, EXPECTED_PAYLOAD[name]))
+            else:
+                flag = "  payload recovered"
         elif want_decode and hidden and len(found) < len(hidden):
             flag = "  <== MISSED %d" % (len(hidden) - len(found))
             failures.append("%s: recovered %d of %d hidden markers" % (name, len(found), len(hidden)))
